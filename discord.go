@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"syscall"
 
 	"github.com/diamondburned/arikawa/v3/api"
 	"github.com/diamondburned/arikawa/v3/discord"
@@ -65,8 +64,7 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 
 	botUser, err := botSession.Me()
 	if err != nil {
-		fmt.Println("error obtaining account details,", err)
-		syscall.Exit(2)
+		Log.Fatalf("error obtaining account details: %v", err)
 	}
 
 	// Ignore all messages created by bots (stops the bot uprising)
@@ -283,12 +281,12 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 			//parse logs and append to current response.
 			for _, url := range allURLS {
 				Log.Debugf("passing %s to keyword parser", url)
-				urlResponse, _ := parseKeyword(allParsed[url], botName, getKeywords("discord", botName, guildID, chanID), getParsing("discord", botName, guildID, chanID))
-				Log.Debugf("response length = %d", len(urlResponse))
-				if len(urlResponse) == 1 && urlResponse[0] == "" || len(urlResponse) == 0 {
+			urlResponse, _ := parseKeyword(allParsed[url], botName, getKeywords("discord", botName, guildID, chanID), getParsing("discord", botName, guildID, chanID))
+			Log.Debugf("response length = %d", len(urlResponse))
+			if (len(urlResponse) == 1 && urlResponse[0] == "") || len(urlResponse) == 0 {
 
-				} else {
-					response = append(response, fmt.Sprintf("I have found the following for: <%s>", url))
+			} else {
+				response = append(response, fmt.Sprintf("I have found the following for: <%s>", url))
 					for _, singleLine := range urlResponse {
 						response = append(response, singleLine)
 					}
@@ -310,16 +308,18 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 	}
 }
 
-// This function will be called (due to AddHandler) every time a new
-// thread is created on any channel that the authenticated bot has access to.
+// discordNewThreadHandler is called when a new thread is created
+// Currently not implemented - thread message handling should be added here
 func discordNewThreadHandler(botSession *session.Session, m *gateway.ThreadCreateEvent, botName string) {
-
+	Log.Debugf("thread created: %s in bot %s", m.ID, botName)
+	// TODO: Implement thread creation handler
 }
 
-// This function will be called (due to AddHandler) every time a new
-// thread is created on any channel that the authenticated bot has access to.
+// discordDelThreadHandler is called when a thread is deleted
+// Currently not implemented - thread cleanup should be added here
 func discordDelThreadHandler(botSession *session.Session, m *gateway.ThreadDeleteEvent, botName string) {
-
+	Log.Debugf("thread deleted: %s in bot %s", m.ID, botName)
+	// TODO: Implement thread deletion handler
 }
 
 // kick a user and log it to a channel if configured
@@ -380,9 +380,12 @@ func sendDiscordMessage(botSession *session.Session, channel *discord.Channel, a
 	prefix := getPrefix("discord", botName, channel.GuildID.String())
 
 	response := strings.Join(responseArray, "\n")
-	response = strings.Replace(response, "&user&", "<@"+author.ID.String()+">", -1)
-	response = strings.Replace(response, "&prefix&", prefix, -1)
-	response = strings.Replace(response, "&react&", "", -1)
+	// Replace all placeholders in a single operation for better performance
+	response = strings.NewReplacer(
+		"&user&", "<@"+author.ID.String()+">",
+		"&prefix&", prefix,
+		"&react&", "",
+	).Replace(response)
 
 	// if there is an error return the error
 	if _, err = botSession.SendMessage(channel.ID, response); err != nil {
@@ -482,10 +485,13 @@ func startDiscordBotConnection(discordConfig discordBot) {
 	botSession := session.New("Bot " + discordConfig.Config.Token)
 
 	// Add Gateway Intents
-	botSession.AddIntents(gateway.IntentGuildMessages)
-	botSession.AddIntents(gateway.IntentGuildEmojis)
-	botSession.AddIntents(gateway.IntentGuildModeration)
-	botSession.AddIntents(gateway.IntentDirectMessages)
+	botSession.AddIntents(gateway.IntentGuildMessages)     // Required for message events
+	botSession.AddIntents(gateway.IntentGuildEmojis)       // For emoji handling
+	botSession.AddIntents(gateway.IntentGuildModeration)   // For kick/ban events
+	botSession.AddIntents(gateway.IntentDirectMessages)    // For DM support
+	botSession.AddIntents(gateway.IntentMessageContent)    // Required for message content (new API requirement)
+	// Optional: Uncomment to receive member join/leave events
+	// botSession.AddIntents(gateway.IntentGuildMembers)
 
 	// Register ready as a callback for the ready event
 	botSession.AddHandler(func(gate *gateway.ReadyEvent) {
@@ -514,11 +520,9 @@ func startDiscordBotConnection(discordConfig discordBot) {
 
 	Log.Debugf("Discord service connected for %s", discordConfig.BotName)
 
-	//bot, err := dg.User("@me")
 	botUser, err := botSession.Me()
 	if err != nil {
-		fmt.Println("error obtaining account details,", err)
-		syscall.Exit(2)
+		Log.Fatalf("error obtaining account details: %v", err)
 	}
 
 	// Permissions requested
