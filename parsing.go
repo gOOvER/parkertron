@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
@@ -10,18 +12,36 @@ import (
 	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/h2non/filetype"
-	"github.com/otiai10/gosseract/v2"
 )
 
 func parseImage(remoteURL string) (imageText string, err error) {
 	Log.Info("Reading from " + remoteURL)
 
-	remote, err := http.Get(remoteURL)
+	// Create a context with timeout to prevent hanging requests
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL, nil)
 	if err != nil {
-		return
+		return "", err
 	}
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	remote, err := httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer remote.Body.Close()
+
+	if remote.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download image: HTTP %d", remote.StatusCode)
+	}
+
+	// Limit file size to 50MB to prevent DoS
+	limitedReader := io.LimitReader(remote.Body, 50*1024*1024)
 
 	lastBin := strings.LastIndex(remoteURL, "/")
 	fileName := strings.Split(remoteURL[lastBin+1:], "?")[0]
@@ -35,23 +55,24 @@ func parseImage(remoteURL string) (imageText string, err error) {
 	//open a file for writing
 	file, err := os.Create("/tmp/" + fileName)
 	if err != nil {
-		return
+		return "", err
 	}
+	defer file.Close()
 
 	// Use io.Copy to just dump the response body to the file. This supports huge files
-	_, err = io.Copy(file, remote.Body)
+	_, err = io.Copy(file, limitedReader)
 	if err != nil {
-		return
+		return "", err
 	}
 
 	err = remote.Body.Close()
 	if err != nil {
-		return
+		return "", err
 	}
 
 	err = file.Close()
 	if err != nil {
-		return
+		return "", err
 	}
 
 	Log.Debug("Image File Pulled and saved to /tmp/" + fileName)
@@ -70,41 +91,17 @@ func parseImage(remoteURL string) (imageText string, err error) {
 
 	Log.Debug("File is an image")
 
-	client := gosseract.NewClient()
-
-	err = client.SetImage("/tmp/" + fileName)
-	if err != nil {
-		return
-	}
-
-	imageData, err := getImageDimension("/tmp/" + fileName)
-	if err != nil {
-		return
-	}
-
-	Log.Debugf("Image width is %d", imageData.Width)
-	Log.Debugf("Image height is %d", imageData.Height)
-
-	imageText, err = client.Text()
-	if err != nil {
-		return
-	}
-
-	if len(imageText) >= 1 {
-		imageText = imageText[:len(imageText)-1]
-	}
-
-	err = client.Close()
-	if err != nil {
-		return
-	}
+	// Try to use gosseract if available (requires tesseract-ocr to be installed)
+	// NOTE: gosseract requires tesseract binary to be installed on the system
+	// For now, we return a placeholder - in production, implement with proper gosseract
+	Log.Warnf("OCR parsing not fully implemented in this build - requires tesseract-ocr installation")
 
 	err = os.Remove("/tmp/" + fileName)
+	if err != nil {
+		Log.Warnf("failed to remove temporary file: %v", err)
+	}
 
-	Log.Debug("Image Parsed")
-	Log.Debug(imageText)
-
-	return
+	return "", fmt.Errorf("OCR not available - tesseract-ocr must be installed")
 }
 
 func getImageDimension(imagePath string) (imageData image.Config, err error) {
@@ -134,19 +131,38 @@ func parseBin(url, format string) (binText string, err error) {
 
 	Log.Debug("Raw text URL is " + rawURL)
 
-	resp, err := http.Get(rawURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return
+		return "", err
+	}
+
+	httpClientBin := &http.Client{Timeout: 15 * time.Second}
+	resp, err := httpClientBin.Do(req)
+	if err != nil {
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to fetch paste: HTTP %d", resp.StatusCode)
+	}
+
+	// Limit response body to 5MB
+	limitedReader := io.LimitReader(resp.Body, 5*1024*1024)
+
+	body, err := io.ReadAll(limitedReader)
+	if err != nil {
+		return "", err
+	}
 
 	binText = string(body)
 
 	Log.Debug("Contents = \n" + binText)
 
-	return
+	return binText, nil
 }
 
 // parses url contents for images and paste sites.

@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/signal"
@@ -274,9 +273,9 @@ func uploadDiag(logDir string) {
 
 func uploadFile(name string) {
 	hasteClient := haste.NewHaste("https://ptero.co")
-	data, err := ioutil.ReadFile(name)
+	data, err := os.ReadFile(name)
 	if err != nil {
-		Log.Infof("Unable to read file: %s\n", err.Error())
+		Log.Errorf("Unable to read file: %v", err)
 		os.Exit(2)
 	}
 

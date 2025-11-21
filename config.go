@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"os"
 	"path"
@@ -389,7 +389,11 @@ func readJSONFromFile(file string, iface interface{}) error {
 
 	// Log.Printf("reading file\n")
 	// read our opened xmlFile as a byte array.
-	byteValue, _ := ioutil.ReadAll(jsonFile)
+	byteValue, err := io.ReadAll(jsonFile)
+	if err != nil {
+		Log.Errorf("error reading json: %v", err)
+		return err
+	}
 	if err = json.Unmarshal(byteValue, iface); err != nil {
 		return err
 	}
@@ -433,7 +437,11 @@ func readYamlFromFile(file string, iface interface{}) (err error) {
 	}()
 
 	// Log.Printf("reading file\n")
-	byteValue, _ := ioutil.ReadAll(yamlFile)
+	byteValue, err := io.ReadAll(yamlFile)
+	if err != nil {
+		Log.Errorf("error reading yaml: %v", err)
+		return
+	}
 	if err = yaml.Unmarshal(byteValue, iface); err != nil {
 		return
 	}
@@ -449,7 +457,7 @@ func createIfDoesntExist(name string) (err error) {
 	if _, err := os.Stat(name); err != nil {
 		// if file doesn't exist
 		if os.IsNotExist(err) {
-			// stat 
+			// stat
 			if _, err = os.Stat(name); err != nil {
 				if file == "" {
 					if err = os.Mkdir(p, 0755); err != nil {
