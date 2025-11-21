@@ -78,9 +78,9 @@ func discordMessageHandler(session *discordgo.Session, messageEvent *discordgo.M
 	chanID := messageEvent.ChannelID
 
 	// if the channel type is a thread use the parent id for the config
-	if channel.Type == discordgo.ChannelTypeGuildPublicThread || 
-	   channel.Type == discordgo.ChannelTypeGuildPrivateThread || 
-	   channel.Type == discordgo.ChannelTypeGuildNewsThread {
+	if channel.Type == discordgo.ChannelTypeGuildPublicThread ||
+		channel.Type == discordgo.ChannelTypeGuildPrivateThread ||
+		channel.Type == discordgo.ChannelTypeGuildNewsThread {
 		chanID = channel.ParentID
 	}
 

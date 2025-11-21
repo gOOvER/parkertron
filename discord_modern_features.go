@@ -19,20 +19,21 @@ import (
 // RegisterSlashCommands registers all slash commands for a bot
 // TODO: Implement slash command registration
 // Example for future implementation:
-// var commands = []*discordgo.ApplicationCommand{
-//     {
-//         Name:        "help",
-//         Description: "Get help about available commands",
-//         Options: []*discordgo.ApplicationCommandOption{
-//             {
-//                 Type:        discordgo.AppCmdOptString,
-//                 Name:        "command",
-//                 Description: "Specific command to get help for",
-//                 Required:    false,
-//             },
-//         },
-//     },
-// }
+//
+//	var commands = []*discordgo.ApplicationCommand{
+//	    {
+//	        Name:        "help",
+//	        Description: "Get help about available commands",
+//	        Options: []*discordgo.ApplicationCommandOption{
+//	            {
+//	                Type:        discordgo.AppCmdOptString,
+//	                Name:        "command",
+//	                Description: "Specific command to get help for",
+//	                Required:    false,
+//	            },
+//	        },
+//	    },
+//	}
 func RegisterSlashCommands(session *discordgo.Session, guildID string) error {
 	Log.Debugf("TODO: Register slash commands for guild %s", guildID)
 	return nil
