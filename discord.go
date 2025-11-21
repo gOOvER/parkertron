@@ -281,12 +281,12 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 			//parse logs and append to current response.
 			for _, url := range allURLS {
 				Log.Debugf("passing %s to keyword parser", url)
-			urlResponse, _ := parseKeyword(allParsed[url], botName, getKeywords("discord", botName, guildID, chanID), getParsing("discord", botName, guildID, chanID))
-			Log.Debugf("response length = %d", len(urlResponse))
-			if (len(urlResponse) == 1 && urlResponse[0] == "") || len(urlResponse) == 0 {
+				urlResponse, _ := parseKeyword(allParsed[url], botName, getKeywords("discord", botName, guildID, chanID), getParsing("discord", botName, guildID, chanID))
+				Log.Debugf("response length = %d", len(urlResponse))
+				if (len(urlResponse) == 1 && urlResponse[0] == "") || len(urlResponse) == 0 {
 
-			} else {
-				response = append(response, fmt.Sprintf("I have found the following for: <%s>", url))
+				} else {
+					response = append(response, fmt.Sprintf("I have found the following for: <%s>", url))
 					for _, singleLine := range urlResponse {
 						response = append(response, singleLine)
 					}
@@ -298,13 +298,13 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 	// send response to channel
 	Log.Debugf("sending response %s to %s", response, chanID)
 	if err := sendDiscordMessage(botSession, channel, messageEvent.Author, response, botName); err != nil {
-		Log.Error(err)
+		Log.Fatalf("Failed to send message: %v", err)
 	}
 
 	// send reaction to channel
 	Log.Debugf("sending reaction %s", reaction)
 	if err := sendDiscordReaction(botSession, channel, message, reaction); err != nil {
-		Log.Error(err)
+		Log.Fatalf("Failed to add reaction: %v", err)
 	}
 }
 
@@ -329,7 +329,11 @@ func kickDiscordUser(botSession *session.Session, guild discord.Guild, user disc
 		return
 	}
 
-	// TODO: Need to use new config for this
+	// Log the action for audit purposes
+	Log.Infof("User kicked: %s (ID: %s) from guild %s (ID: %s) - Reason: %s - Kicked by: %s",
+		user.Username, user.ID, guild.Name, guild.ID, reason, authorname)
+
+	// TODO: Implement webhook logging to configured audit channel if enabled
 	// sendDiscordEmbed(getDiscordConfigString("embed.audit"), embed)
 
 	Log.Info("User " + user.Username + " has been kicked from " + guild.Name + " for " + reason)
@@ -348,7 +352,12 @@ func banDiscordUser(botSession *session.Session, guild discord.Guild, user disco
 		return
 	}
 
-	// TODO: Need to use new config for embed audit to log to a webhook
+	// Log the action for audit purposes
+	Log.Infof("User banned: %s (ID: %s) from guild %s (ID: %s) - Reason: %s - Message history: %d days - Banned by: %s",
+		user.Username, user.ID, guild.Name, guild.ID, reason, days, authorname)
+
+	// TODO: Implement webhook logging to configured audit channel if enabled
+	// sendDiscordEmbed(getDiscordConfigString("embed.audit"), embed)
 
 	Log.Info("User " + user.Username + " has been banned from " + guild.Name + " for " + reason)
 
@@ -357,13 +366,18 @@ func banDiscordUser(botSession *session.Session, guild discord.Guild, user disco
 
 // clean up messages if configured to
 func deleteDiscordMessages(botSession *session.Session, channel *discord.Channel, messages []discord.MessageID, reason string) (err error) {
-	Log.Debugf("Removing messages from %s", channel.Name)
+	Log.Debugf("Removing %d messages from %s", len(messages), channel.Name)
 
 	if err = botSession.DeleteMessages(channel.ID, messages, api.AuditLogReason(reason)); err != nil {
 		return
 	}
 
-	// TODO: Need to use new config for embed audit to log to a webhook
+	// Log the action for audit purposes
+	Log.Infof("Messages deleted: %d messages from channel %s (ID: %s) - Reason: %s",
+		len(messages), channel.Name, channel.ID, reason)
+
+	// TODO: Implement webhook logging to configured audit channel if enabled
+	// sendDiscordEmbed(getDiscordConfigString("embed.audit"), embed)
 
 	Log.Debug("messages were deleted.")
 
@@ -389,6 +403,7 @@ func sendDiscordMessage(botSession *session.Session, channel *discord.Channel, a
 
 	// if there is an error return the error
 	if _, err = botSession.SendMessage(channel.ID, response); err != nil {
+		Log.Errorf("Failed to send message to channel %s: %v", channel.ID, err)
 		return
 	}
 
@@ -398,7 +413,7 @@ func sendDiscordMessage(botSession *session.Session, channel *discord.Channel, a
 // send a reaction to a message
 func sendDiscordReaction(botSession *session.Session, channel *discord.Channel, message discord.Message, reactionArray []string) (err error) {
 	// if there is no reaction to send just return
-	if len(reactionArray) == 0 || len(reactionArray) == 1 && reactionArray[0] == "" {
+	if len(reactionArray) == 0 || (len(reactionArray) == 1 && reactionArray[0] == "") {
 		return
 	}
 
@@ -417,9 +432,10 @@ func sendDiscordReaction(botSession *session.Session, channel *discord.Channel, 
 
 	for _, reaction := range reactionArray {
 		Log.Debugf("sending \"%s\" as a reaction to message: %s", reaction, message.ID)
-		// if there is an error sending a message return it
+		// if there is an error sending a reaction, log it but continue with other reactions
 		if err = botSession.React(channel.ID, message.ID, discord.APIEmoji(reaction)); err != nil {
-			return
+			Log.Warnf("Failed to add reaction %s: %v", reaction, err)
+			continue
 		}
 	}
 	return
@@ -429,7 +445,7 @@ func sendDiscordReaction(botSession *session.Session, channel *discord.Channel, 
 func sendDiscordEmbed(botSession *session.Session, channel discord.Channel, embed *discord.Embed) error {
 	// if there is an error sending the embed message
 	if _, err := botSession.SendEmbeds(channel.ID, *embed); err != nil {
-		Log.Fatal("Embed send error")
+		Log.Errorf("Failed to send embed to channel %s: %v", channel.ID, err)
 		return err
 	}
 
@@ -485,11 +501,11 @@ func startDiscordBotConnection(discordConfig discordBot) {
 	botSession := session.New("Bot " + discordConfig.Config.Token)
 
 	// Add Gateway Intents
-	botSession.AddIntents(gateway.IntentGuildMessages)     // Required for message events
-	botSession.AddIntents(gateway.IntentGuildEmojis)       // For emoji handling
-	botSession.AddIntents(gateway.IntentGuildModeration)   // For kick/ban events
-	botSession.AddIntents(gateway.IntentDirectMessages)    // For DM support
-	botSession.AddIntents(gateway.IntentMessageContent)    // Required for message content (new API requirement)
+	botSession.AddIntents(gateway.IntentGuildMessages)   // Required for message events
+	botSession.AddIntents(gateway.IntentGuildEmojis)     // For emoji handling
+	botSession.AddIntents(gateway.IntentGuildModeration) // For kick/ban events
+	botSession.AddIntents(gateway.IntentDirectMessages)  // For DM support
+	botSession.AddIntents(gateway.IntentMessageContent)  // Required for message content (new API requirement)
 	// Optional: Uncomment to receive member join/leave events
 	// botSession.AddIntents(gateway.IntentGuildMembers)
 
