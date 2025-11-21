@@ -1,0 +1,144 @@
+version: '3.8'
+
+# Development/Advanced docker-compose with optional services
+# Use: docker-compose -f docker-compose.yml -f docker-compose.override.yml up
+
+services:
+  parkertron:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - GO_VERSION=1.22
+    
+    container_name: parkertron-dev
+    restart: unless-stopped
+    
+    environment:
+      - LOG_LEVEL=debug
+      - DISCORD_ENABLED=true
+      - IRC_ENABLED=false
+    
+    volumes:
+      - ./configs:/app/configs:ro
+      - parkertron-logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    
+    networks:
+      - parkertron-network
+    
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    labels:
+      - "com.dockploy.service=parkertron-dev"
+
+  # Optional: Log aggregation with Loki
+  # Requires: docker plugin install grafana/loki-docker-driver:latest --alias loki --grant-all-permissions
+  # loki:
+  #   image: grafana/loki:latest
+  #   container_name: loki
+  #   ports:
+  #     - "3100:3100"
+  #   volumes:
+  #     - loki-data:/loki
+  #   command: -config.file=/etc/loki/local-config.yaml
+  #   networks:
+  #     - parkertron-network
+  #   labels:
+  #     - "com.dockploy.service=loki-logging"
+
+  # Optional: Prometheus monitoring
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   container_name: prometheus
+  #   ports:
+  #     - "9090:9090"
+  #   volumes:
+  #     - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #     - prometheus-data:/prometheus
+  #   command:
+  #     - '--config.file=/etc/prometheus/prometheus.yml'
+  #   networks:
+  #     - parkertron-network
+  #   labels:
+  #     - "com.dockploy.service=prometheus"
+
+  # Optional: Grafana dashboards
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=admin
+  #     - GF_INSTALL_PLUGINS=grafana-piechart-panel
+  #   volumes:
+  #     - grafana-data:/var/lib/grafana
+  #     - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+  #   networks:
+  #     - parkertron-network
+  #   depends_on:
+  #     - prometheus
+  #   labels:
+  #     - "com.dockploy.service=grafana"
+
+  # Optional: Redis cache (future feature)
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: parkertron-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis-data:/data
+  #   networks:
+  #     - parkertron-network
+  #   command: redis-server --appendonly yes
+  #   labels:
+  #     - "com.dockploy.service=redis-cache"
+
+  # Optional: PostgreSQL database (future feature)
+  # postgres:
+  #   image: postgres:15-alpine
+  #   container_name: parkertron-db
+  #   environment:
+  #     - POSTGRES_DB=parkertron
+  #     - POSTGRES_USER=parkertron
+  #     - POSTGRES_PASSWORD=${DB_PASSWORD:-changeme}
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   networks:
+  #     - parkertron-network
+  #   ports:
+  #     - "5432:5432"
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U parkertron"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   labels:
+  #     - "com.dockploy.service=postgres-db"
+
+volumes:
+  parkertron-logs:
+    driver: local
+  # loki-data:
+  #   driver: local
+  # prometheus-data:
+  #   driver: local
+  # grafana-data:
+  #   driver: local
+  # redis-data:
+  #   driver: local
+  # postgres-data:
+  #   driver: local
+
+networks:
+  parkertron-network:
+    driver: bridge

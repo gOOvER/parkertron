@@ -1,0 +1,94 @@
+version: '3.8'
+
+services:
+  parkertron:
+    image: parkertron:latest
+    container_name: parkertron-bot
+    restart: unless-stopped
+    
+    # Build configuration
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - GO_VERSION=1.22
+    
+    # Environment variables
+    environment:
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOG_DIR=/app/logs
+      
+      # Config directory
+      - CONFIG_DIR=/app/configs
+      
+      # Optional: Discord settings
+      - DISCORD_ENABLED=${DISCORD_ENABLED:-true}
+      
+      # Optional: IRC settings
+      - IRC_ENABLED=${IRC_ENABLED:-false}
+      
+      # Optional: Slack settings (future feature)
+      - SLACK_ENABLED=${SLACK_ENABLED:-false}
+    
+    # Volume mounts
+    volumes:
+      # Configuration directory - mount your config files here
+      - ./configs:/app/configs:ro
+      
+      # Logs directory - persistent storage for logs
+      - parkertron-logs:/app/logs
+      
+      # Optional: Mount specific config if needed
+      # - ./parkertron.yml:/app/parkertron.yml:ro
+    
+    # Port exposure (if needed for webhooks or monitoring)
+    # ports:
+    #   - "5000:5000"
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "test", "-f", "/app/parkertron"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service=parkertron"
+    
+    # Labels for Dockploy
+    labels:
+      - "com.dockploy.service=parkertron"
+      - "com.dockploy.type=bot"
+      - "description=Discord/IRC/Slack chatbot with message parsing"
+
+# Named volumes for persistent storage
+volumes:
+  parkertron-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./logs
+
+# Network configuration
+networks:
+  default:
+    name: parkertron-network
+    driver: bridge
