@@ -1,0 +1,62 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# IDE files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+.DS_Store
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+parkertron
+parkertron.exe
+*.o
+*.a
+
+# Test files
+*_test.go
+*.test
+*.cover
+coverage.out
+
+# Dependencies
+vendor/
+node_modules/
+
+# Logs
+logs/
+*.log
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Documentation
+README.md
+CHANGELOG.md
+DISCORD_REVIEW.md
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Docker files
+docker-compose.override.yml
+Dockerfile.dev
+
+# Misc
+*.md
+.gitignore
+.dockerignore
