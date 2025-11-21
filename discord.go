@@ -1,18 +1,14 @@
 package main
 
-// Thank Stroom on the discordgopher discord for helping me with embedded functions in the handlers
+// Migrated from arikawa to discordgo for better feature support and maintenance
+// discordgo v0.29.0 - Community standard Discord bot library for Go
 
 import (
-	"context"
 	"fmt"
 	"regexp"
 	"strings"
 
-	"github.com/diamondburned/arikawa/v3/api"
-	"github.com/diamondburned/arikawa/v3/discord"
-	"github.com/diamondburned/arikawa/v3/gateway"
-	"github.com/diamondburned/arikawa/v3/session"
-	"github.com/diamondburned/arikawa/v3/utils/json/option"
+	"github.com/bwmarrin/discordgo"
 	"mvdan.cc/xurls/v2"
 )
 
@@ -25,26 +21,21 @@ var (
 	discordLoad = make(chan string)
 )
 
-// This function will be called (due to AddHandler) when the bot receives
-// the "ready" event from Discord.
-func readyDiscord(botSession *session.Session, game string) {
-	if !discord.EmojiID(985546330271252530).IsValid() {
-		Log.Debug("emoji is invalid")
-	}
-
-	activities := []discord.Activity{
+// This function will be called when the bot starts up
+func readyDiscord(session *discordgo.Session, ready *discordgo.Ready, game string) {
+	activities := []*discordgo.Activity{
 		{
-			Name:  "custom",
-			Type:  4,
+			Name:  game,
+			Type:  discordgo.ActivityTypeCustom,
 			State: game,
 		},
 	}
 
-	status := &gateway.UpdatePresenceCommand{
+	err := session.UpdateStatusComplex(discordgo.UpdateStatusData{
 		Activities: activities,
-	}
-	// if there is an error setting the game log and return
-	if err := botSession.Gateway().Send(context.Background(), status); err != nil {
+		Status:     "online",
+	})
+	if err != nil {
 		Log.Fatalf("error setting game: %s", err)
 		return
 	}
@@ -52,9 +43,8 @@ func readyDiscord(botSession *session.Session, game string) {
 	Log.Debugf("set game to: %s", game)
 }
 
-// This function will be called (due to AddHandler) every time a new
-// message is created on any channel that the authenticated bot has access to.
-func discordMessageHandler(botSession *session.Session, messageEvent *gateway.MessageCreateEvent, botName string) {
+// This function will be called every time a new message is created
+func discordMessageHandler(session *discordgo.Session, messageEvent *discordgo.MessageCreate, botName string) {
 	Log.Debugf("bot is %s", botName)
 	Log.Debugf("message '%s'", messageEvent.Content)
 
@@ -62,7 +52,7 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 	var response []string
 	var reaction []string
 
-	botUser, err := botSession.Me()
+	botUser, err := session.User("@me")
 	if err != nil {
 		Log.Fatalf("error obtaining account details: %v", err)
 	}
@@ -74,7 +64,7 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 	}
 
 	// get channel information
-	channel, err := botSession.Channel(messageEvent.ChannelID)
+	channel, err := session.Channel(messageEvent.ChannelID)
 	if err != nil {
 		Log.Fatal("Channel error ", err)
 		return
@@ -84,24 +74,26 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 
 	botID := botUser.ID
 
-	guildID := channel.GuildID.String()
-	chanID := messageEvent.ChannelID.String()
+	guildID := channel.GuildID
+	chanID := messageEvent.ChannelID
 
 	// if the channel type is a thread use the parent id for the config
-	if channel.Type == 11 {
-		chanID = channel.ParentID.String()
+	if channel.Type == discordgo.ChannelTypeGuildPublicThread || 
+	   channel.Type == discordgo.ChannelTypeGuildPrivateThread || 
+	   channel.Type == discordgo.ChannelTypeGuildNewsThread {
+		chanID = channel.ParentID
 	}
 
 	Log.Debugf("prefix: %s", getPrefix("discord", botName, guildID))
 
 	// if the channel is a DM
-	if channel.Type == 1 {
+	if channel.Type == discordgo.ChannelTypeDM {
 		_, dmResp := getMentions("discord", botName, guildID, "DirectMessage")
-		if err := sendDiscordMessage(botSession, channel, messageEvent.Author, dmResp.Reaction, botName); err != nil {
+		if err := sendDiscordMessage(session, channel, messageEvent.Author, dmResp.Reaction, botName); err != nil {
 			Log.Error(err)
 		}
 
-		if err := sendDiscordReaction(botSession, channel, message, dmResp.Reaction); err != nil {
+		if err := sendDiscordReaction(session, channel, message, dmResp.Reaction); err != nil {
 			Log.Error(err)
 		}
 
@@ -119,11 +111,11 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 		for _, filter := range getFilter("discord", botName, guildID) {
 			if strings.Contains(messageEvent.Content, filter.Term) {
 				Log.Infof("message was removed for containing %s", filter.Term)
-				if err := deleteDiscordMessages(botSession, channel, []discord.MessageID{0: messageEvent.ID}, ""); err != nil {
+				if err := deleteDiscordMessages(session, channel, []string{messageEvent.ID}, ""); err != nil {
 					Log.Error(err)
 				}
 
-				if err := sendDiscordMessage(botSession, channel, messageEvent.Author, filter.Reason, botName); err != nil {
+				if err := sendDiscordMessage(session, channel, messageEvent.Author, filter.Reason, botName); err != nil {
 					Log.Error(err)
 				}
 				return
@@ -144,8 +136,8 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 
 	// drop messages from blacklisted users
 	for _, user := range getBlacklist("discord", botName, guildID, chanID) {
-		if user == messageEvent.Author.ID.String() {
-			Log.Debugf("user %s is blacklisted username is %s", messageEvent.Author.ID.String(), messageEvent.Author.Username)
+		if user == messageEvent.Author.ID {
+			Log.Debugf("user %s is blacklisted username is %s", messageEvent.Author.ID, messageEvent.Author.Username)
 			return
 		}
 	}
@@ -155,10 +147,8 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 	// for all attachment urls
 	var attachmentURLs []string
 	for _, url := range messageEvent.Attachments {
-		attachmentURLs = append(attachmentURLs, url.Proxy)
+		attachmentURLs = append(attachmentURLs, url.ProxyURL)
 	}
-
-	// this was for debugging/testing only
 
 	Log.Debugf("all attachments %s", attachmentURLs)
 	Log.Debugf("all ignores %+v", getParsing("discord", botName, guildID, chanID).Paste.Ignore)
@@ -205,12 +195,11 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 		allURLS = append(allURLS, attachmentURLs[i])
 	}
 
-	// Log.Debug(allURLS)
 	Log.Debugf("checking mentions")
 	if len(messageEvent.Mentions) != 0 {
 		ping, mention := getMentions("discord", botName, guildID, chanID)
 
-		if messageEvent.Mentions[0].ID == botID && messageEvent.Content == fmt.Sprintf("<@%s>", botID.String()) {
+		if messageEvent.Mentions[0].ID == botID && messageEvent.Content == fmt.Sprintf("<@%s>", botID) {
 			Log.Debugf("bot was pinged")
 			response = ping.Response
 			reaction = ping.Reaction
@@ -232,8 +221,8 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 		response, reaction = parseCommand(strings.TrimPrefix(messageEvent.Content, getPrefix("discord", botName, guildID)), botName, getCommands("discord", botName, guildID, chanID))
 		// if the flag for clearing commands is set and there is a response
 		if getCommandClear("discord", botName, guildID) && len(response) > 0 {
-			Log.Debugf("removing command message %s", messageEvent.ID.String())
-			if err := deleteDiscordMessages(botSession, channel, []discord.MessageID{0: messageEvent.ID}, ""); err != nil {
+			Log.Debugf("removing command message %s", messageEvent.ID)
+			if err := deleteDiscordMessages(session, channel, []string{messageEvent.ID}, ""); err != nil {
 				Log.Error(err)
 			}
 		}
@@ -258,16 +247,16 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 			Log.Debugf("no URLs to read")
 		} else if len(allURLS) > maxLogs {
 			Log.Debug("too many logs or screenshots to try and read.")
-			if err := sendDiscordMessage(botSession, channel, messageEvent.Author, logResponse, botName); err != nil {
+			if err := sendDiscordMessage(session, channel, messageEvent.Author, logResponse, botName); err != nil {
 				Log.Error(err)
 			}
-			if err := sendDiscordReaction(botSession, channel, message, logReaction); err != nil {
+			if err := sendDiscordReaction(session, channel, message, logReaction); err != nil {
 				Log.Error(err)
 			}
 			return
 		} else {
 			Log.Debugf("reading logs")
-			if err := sendDiscordReaction(botSession, channel, message, []string{"👀"}); err != nil {
+			if err := sendDiscordReaction(session, channel, message, []string{"👀"}); err != nil {
 				Log.Error(err)
 			}
 
@@ -281,12 +270,12 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 			//parse logs and append to current response.
 			for _, url := range allURLS {
 				Log.Debugf("passing %s to keyword parser", url)
-			urlResponse, _ := parseKeyword(allParsed[url], botName, getKeywords("discord", botName, guildID, chanID), getParsing("discord", botName, guildID, chanID))
-			Log.Debugf("response length = %d", len(urlResponse))
-			if (len(urlResponse) == 1 && urlResponse[0] == "") || len(urlResponse) == 0 {
+				urlResponse, _ := parseKeyword(allParsed[url], botName, getKeywords("discord", botName, guildID, chanID), getParsing("discord", botName, guildID, chanID))
+				Log.Debugf("response length = %d", len(urlResponse))
+				if (len(urlResponse) == 1 && urlResponse[0] == "") || len(urlResponse) == 0 {
 
-			} else {
-				response = append(response, fmt.Sprintf("I have found the following for: <%s>", url))
+				} else {
+					response = append(response, fmt.Sprintf("I have found the following for: <%s>", url))
 					for _, singleLine := range urlResponse {
 						response = append(response, singleLine)
 					}
@@ -297,40 +286,38 @@ func discordMessageHandler(botSession *session.Session, messageEvent *gateway.Me
 
 	// send response to channel
 	Log.Debugf("sending response %s to %s", response, chanID)
-	if err := sendDiscordMessage(botSession, channel, messageEvent.Author, response, botName); err != nil {
+	if err := sendDiscordMessage(session, channel, messageEvent.Author, response, botName); err != nil {
 		Log.Error(err)
 	}
 
 	// send reaction to channel
 	Log.Debugf("sending reaction %s", reaction)
-	if err := sendDiscordReaction(botSession, channel, message, reaction); err != nil {
+	if err := sendDiscordReaction(session, channel, message, reaction); err != nil {
 		Log.Error(err)
 	}
 }
 
 // discordNewThreadHandler is called when a new thread is created
 // Currently not implemented - thread message handling should be added here
-func discordNewThreadHandler(botSession *session.Session, m *gateway.ThreadCreateEvent, botName string) {
+func discordNewThreadHandler(session *discordgo.Session, m *discordgo.ThreadCreate, botName string) {
 	Log.Debugf("thread created: %s in bot %s", m.ID, botName)
 	// TODO: Implement thread creation handler
 }
 
 // discordDelThreadHandler is called when a thread is deleted
 // Currently not implemented - thread cleanup should be added here
-func discordDelThreadHandler(botSession *session.Session, m *gateway.ThreadDeleteEvent, botName string) {
+func discordDelThreadHandler(session *discordgo.Session, m *discordgo.ThreadDelete, botName string) {
 	Log.Debugf("thread deleted: %s in bot %s", m.ID, botName)
 	// TODO: Implement thread deletion handler
 }
 
 // kick a user and log it to a channel if configured
-// session, guild, user being kicked,
-func kickDiscordUser(botSession *session.Session, guild discord.Guild, user discord.User, username, reason, authorname string) (err error) {
-	if err = botSession.Kick(guild.ID, user.ID, api.AuditLogReason(reason)); err != nil {
+func kickDiscordUser(session *discordgo.Session, guild *discordgo.Guild, user *discordgo.User, username, reason, authorname string) (err error) {
+	if err = session.GuildMemberDeleteWithReason(guild.ID, user.ID, reason); err != nil {
 		return
 	}
 
-	// TODO: Need to use new config for this
-	// sendDiscordEmbed(getDiscordConfigString("embed.audit"), embed)
+	// TODO: Need to use new config for embed audit to log to a webhook
 
 	Log.Info("User " + user.Username + " has been kicked from " + guild.Name + " for " + reason)
 
@@ -338,13 +325,8 @@ func kickDiscordUser(botSession *session.Session, guild discord.Guild, user disc
 }
 
 // ban a user and log it to a channel if configured
-func banDiscordUser(botSession *session.Session, guild discord.Guild, user discord.User, username, reason, authorname string, days int) (err error) {
-	banData := api.BanData{
-		DeleteDays:     option.NewUint(uint(days)),
-		AuditLogReason: api.AuditLogReason(reason),
-	}
-
-	if err = botSession.Ban(guild.ID, user.ID, banData); err != nil {
+func banDiscordUser(session *discordgo.Session, guild *discordgo.Guild, user *discordgo.User, username, reason, authorname string, days int) (err error) {
+	if err = session.GuildBanCreateWithReason(guild.ID, user.ID, reason, days); err != nil {
 		return
 	}
 
@@ -356,39 +338,42 @@ func banDiscordUser(botSession *session.Session, guild discord.Guild, user disco
 }
 
 // clean up messages if configured to
-func deleteDiscordMessages(botSession *session.Session, channel *discord.Channel, messages []discord.MessageID, reason string) (err error) {
+func deleteDiscordMessages(session *discordgo.Session, channel *discordgo.Channel, messages []string, reason string) (err error) {
 	Log.Debugf("Removing messages from %s", channel.Name)
 
-	if err = botSession.DeleteMessages(channel.ID, messages, api.AuditLogReason(reason)); err != nil {
-		return
+	for _, messageID := range messages {
+		if err = session.ChannelMessageDelete(channel.ID, messageID); err != nil {
+			Log.Error("Failed to delete message:", err)
+			// Continue trying to delete other messages even if one fails
+		}
 	}
 
 	// TODO: Need to use new config for embed audit to log to a webhook
 
 	Log.Debug("messages were deleted.")
 
-	return
+	return nil
 }
 
 // send message handling
-func sendDiscordMessage(botSession *session.Session, channel *discord.Channel, author discord.User, responseArray []string, botName string) (err error) {
+func sendDiscordMessage(session *discordgo.Session, channel *discordgo.Channel, author *discordgo.User, responseArray []string, botName string) (err error) {
 	// if there is no response to send just return
 	if len(responseArray) == 0 {
 		return
 	}
 
-	prefix := getPrefix("discord", botName, channel.GuildID.String())
+	prefix := getPrefix("discord", botName, channel.GuildID)
 
 	response := strings.Join(responseArray, "\n")
 	// Replace all placeholders in a single operation for better performance
 	response = strings.NewReplacer(
-		"&user&", "<@"+author.ID.String()+">",
+		"&user&", "<@"+author.ID+">",
 		"&prefix&", prefix,
 		"&react&", "",
 	).Replace(response)
 
 	// if there is an error return the error
-	if _, err = botSession.SendMessage(channel.ID, response); err != nil {
+	if _, err = session.ChannelMessageSend(channel.ID, response); err != nil {
 		return
 	}
 
@@ -396,9 +381,9 @@ func sendDiscordMessage(botSession *session.Session, channel *discord.Channel, a
 }
 
 // send a reaction to a message
-func sendDiscordReaction(botSession *session.Session, channel *discord.Channel, message discord.Message, reactionArray []string) (err error) {
+func sendDiscordReaction(session *discordgo.Session, channel *discordgo.Channel, message *discordgo.Message, reactionArray []string) (err error) {
 	// if there is no reaction to send just return
-	if len(reactionArray) == 0 || len(reactionArray) == 1 && reactionArray[0] == "" {
+	if len(reactionArray) == 0 || (len(reactionArray) == 1 && reactionArray[0] == "") {
 		return
 	}
 
@@ -418,7 +403,7 @@ func sendDiscordReaction(botSession *session.Session, channel *discord.Channel, 
 	for _, reaction := range reactionArray {
 		Log.Debugf("sending \"%s\" as a reaction to message: %s", reaction, message.ID)
 		// if there is an error sending a message return it
-		if err = botSession.React(channel.ID, message.ID, discord.APIEmoji(reaction)); err != nil {
+		if err = session.MessageReactionAdd(channel.ID, message.ID, reaction); err != nil {
 			return
 		}
 	}
@@ -426,9 +411,9 @@ func sendDiscordReaction(botSession *session.Session, channel *discord.Channel, 
 }
 
 // send a message with an embed
-func sendDiscordEmbed(botSession *session.Session, channel discord.Channel, embed *discord.Embed) error {
+func sendDiscordEmbed(session *discordgo.Session, channelID string, embed *discordgo.MessageEmbed) error {
 	// if there is an error sending the embed message
-	if _, err := botSession.SendEmbeds(channel.ID, *embed); err != nil {
+	if _, err := session.ChannelMessageSendEmbed(channelID, embed); err != nil {
 		Log.Fatal("Embed send error")
 		return err
 	}
@@ -443,9 +428,6 @@ func startDiscordsBots() {
 	// range over the bots available to start
 	for _, bot := range discordGlobal.Bots {
 		Log.Infof("Connecting to %s\n", bot.BotName)
-
-		// spin up a channel to tell the bot to stop later
-		// stopDiscord[bot.BotName] = make(chan string)
 
 		// start the bot
 		go startDiscordBotConnection(bot)
@@ -482,45 +464,46 @@ func startDiscordBotConnection(discordConfig discordBot) {
 
 	// Create a new Discord session using the provided bot token.
 	Log.Debugf("using token '%s' to auth", discordConfig.Config.Token)
-	botSession := session.New("Bot " + discordConfig.Config.Token)
+	session, err := discordgo.New("Bot " + discordConfig.Config.Token)
+	if err != nil {
+		Log.Fatalf("error creating Discord session: %v", err)
+		return
+	}
 
 	// Add Gateway Intents
-	botSession.AddIntents(gateway.IntentGuildMessages)     // Required for message events
-	botSession.AddIntents(gateway.IntentGuildEmojis)       // For emoji handling
-	botSession.AddIntents(gateway.IntentGuildModeration)   // For kick/ban events
-	botSession.AddIntents(gateway.IntentDirectMessages)    // For DM support
-	botSession.AddIntents(gateway.IntentMessageContent)    // Required for message content (new API requirement)
-	// Optional: Uncomment to receive member join/leave events
-	// botSession.AddIntents(gateway.IntentGuildMembers)
+	session.Identify.Intents = discordgo.IntentsGuildMessages |
+		discordgo.IntentsDirectMessages |
+		discordgo.IntentsGuildBans |
+		discordgo.IntentsMessageContent
 
-	// Register ready as a callback for the ready event
-	botSession.AddHandler(func(gate *gateway.ReadyEvent) {
-		readyDiscord(botSession, discordConfig.Config.Game)
+	// Register ready event handler
+	session.AddHandler(func(s *discordgo.Session, ready *discordgo.Ready) {
+		readyDiscord(s, ready, discordConfig.Config.Game)
 	})
 
-	// Register messageCreate as a callback for the messageCreate events.
-	for range discordConfig.Servers {
-		botSession.AddHandler(func(gate *gateway.MessageCreateEvent) {
-			discordMessageHandler(botSession, gate, discordConfig.BotName)
-		})
-	}
+	// Register messageCreate event handler
+	session.AddHandler(func(s *discordgo.Session, m *discordgo.MessageCreate) {
+		discordMessageHandler(s, m, discordConfig.BotName)
+	})
 
-	for range discordConfig.Servers {
-		botSession.AddHandler(func(gate *gateway.ThreadCreateEvent) {})
-	}
+	// Register thread create event handler
+	session.AddHandler(func(s *discordgo.Session, tc *discordgo.ThreadCreate) {
+		discordNewThreadHandler(s, tc, discordConfig.BotName)
+	})
 
-	for range discordConfig.Servers {
-		botSession.AddHandler(func(gate *gateway.ThreadDeleteEvent) {})
-	}
+	// Register thread delete event handler
+	session.AddHandler(func(s *discordgo.Session, td *discordgo.ThreadDelete) {
+		discordDelThreadHandler(s, td, discordConfig.BotName)
+	})
 
 	// Open the websocket and begin listening.
-	if err := botSession.Open(context.Background()); err != nil {
+	if err := session.Open(); err != nil {
 		Log.Error("Failed to connect:", err)
 	}
 
 	Log.Debugf("Discord service connected for %s", discordConfig.BotName)
 
-	botUser, err := botSession.Me()
+	botUser, err := session.User("@me")
 	if err != nil {
 		Log.Fatalf("error obtaining account details: %v", err)
 	}
@@ -534,7 +517,7 @@ func startDiscordBotConnection(discordConfig discordBot) {
 	//		User External Emojis
 	//		Embed links
 
-	Log.Debug("Invite the bot to your server with https://discordapp.com/oauth2/authorize?client_id=" + botUser.ID.String() + "&scope=bot&permissions=1495185845318")
+	Log.Debug("Invite the bot to your server with https://discordapp.com/oauth2/authorize?client_id=" + botUser.ID + "&scope=bot&permissions=1495185845318")
 
 	discordLoad <- ""
 
@@ -542,7 +525,7 @@ func startDiscordBotConnection(discordConfig discordBot) {
 
 	Log.Debugf("stop recieved on %s", discordConfig.BotName)
 
-	if err := botSession.Close(); err != nil {
+	if err := session.Close(); err != nil {
 		Log.Error(err)
 	}
 
